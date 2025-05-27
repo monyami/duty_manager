@@ -7,6 +7,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
@@ -180,6 +181,11 @@ public class MainActivity extends AppCompatActivity {
                     // Toggle the done flag and update the view
                     note.done = !note.done;
                     adapter.notifyItemChanged(position);
+                })
+                .setNeutralButton("Delete", (d, w) -> {
+                    notes.remove(position);
+                    adapter.notifyItemRemoved(position);
+                    Toast.makeText(this, "Task deleted", Toast.LENGTH_SHORT).show();
                 })
                 .setNegativeButton("Close", null)
                 .show();
