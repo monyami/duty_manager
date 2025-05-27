@@ -87,7 +87,7 @@ public class MainActivity extends AppCompatActivity {
                     if (!title.isEmpty()) {
                         // Add new note and update the adapter
                         notes.add(new Note(title, body));
-                        adapter.notifyItemInserted(notes.size() - 1);
+                        sortNotes();
                     }
                 })
                 .setNegativeButton("Cancel", null)
@@ -134,6 +134,9 @@ public class MainActivity extends AppCompatActivity {
             Note n = data.get(pos);
             h.title.setText(n.title);
             h.status.setText(n.done ? "Done" : "Not done");
+
+            float alpha = n.done ? 0.5f : 1.0f; //opacity za zavrsene
+            h.itemView.setAlpha(alpha); 
         }
 
         @Override
@@ -180,7 +183,7 @@ public class MainActivity extends AppCompatActivity {
                 .setPositiveButton(note.done ? "Mark as Undone" : "Mark as Done", (d, w) -> {
                     // Toggle the done flag and update the view
                     note.done = !note.done;
-                    adapter.notifyItemChanged(position);
+                    sortNotes();
                 })
                 .setNeutralButton("Delete", (d, w) -> {
                     notes.remove(position);
@@ -189,5 +192,9 @@ public class MainActivity extends AppCompatActivity {
                 })
                 .setNegativeButton("Close", null)
                 .show();
+    }
+    private void sortNotes() {
+        notes.sort((a, b) -> Boolean.compare(a.done, b.done)); // false < true
+        adapter.notifyDataSetChanged();
     }
 }
