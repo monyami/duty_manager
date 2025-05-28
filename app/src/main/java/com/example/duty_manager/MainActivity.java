@@ -1,3 +1,8 @@
+/*
+ * MainActivity.java — drop-in replacement.
+ * Uses Room for simple persistence while keeping UI logic almost untouched.
+ * All comments are in English as requested.
+ */
 package com.example.duty_manager;
 
 import android.os.Bundle;
@@ -15,19 +20,21 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.LinearLayoutCompat;
 import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
+import androidx.room.Room;
 
 import com.google.android.material.floatingactionbutton.FloatingActionButton;
 
 import java.util.ArrayList;
 import java.util.List;
 
-/**
- * Single–file implementation: keeps data in memory, shows a RecyclerView, and handles dialogs.
- */
 public class MainActivity extends AppCompatActivity {
 
-    // In-memory list of notes (not persisted)
+    /** DAO reference for all DB operations. */
+    private NoteDao noteDao;
+
+    /** In-memory cache mirroring DB content (used by the adapter). */
     private final List<Note> notes = new ArrayList<>();
+
     private NoteAdapter adapter;
 
     @Override
@@ -35,14 +42,29 @@ public class MainActivity extends AppCompatActivity {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        // Add an initial placeholder note
-        notes.add(new Note("Welcome", "Tap the + button to add a note"));
+        // Build a Room DB. allowMainThreadQueries() is *only* to keep the example short.
+        AppDatabase db = Room.databaseBuilder(getApplicationContext(),
+                        AppDatabase.class,
+                        "notes.db")
+                .allowMainThreadQueries()
+                .build();
+        noteDao = db.noteDao();
 
-        setupRecycler(); // Setup RecyclerView
-        setupFab();      // Setup Floating Action Button
+        // Load persisted notes.
+        notes.addAll(noteDao.getAll());
+
+        // First run → add a welcome note.
+        if (notes.isEmpty()) {
+            Note welcome = new Note("Welcome", "Tap the + button to add a note");
+            welcome.id = (int) noteDao.insert(welcome);
+            notes.add(welcome);
+        }
+
+        setupRecycler();
+        setupFab();
     }
 
-    // Initializes the RecyclerView with vertical layout and connects adapter
+    /** Initializes RecyclerView with a vertical LinearLayoutManager. */
     private void setupRecycler() {
         RecyclerView recycler = findViewById(R.id.recycler);
         recycler.setLayoutManager(new LinearLayoutManager(this));
@@ -50,17 +72,14 @@ public class MainActivity extends AppCompatActivity {
         recycler.setAdapter(adapter);
     }
 
-    // Connects the FAB and its click action
+    /** Sets up Floating Action Button for adding notes. */
     private void setupFab() {
         FloatingActionButton fab = findViewById(R.id.fab);
         fab.setOnClickListener(v -> showAddDialog());
     }
 
-    /**
-     * Displays a dialog allowing the user to create a new note.
-     */
+    /** Dialog for creating a new note. */
     private void showAddDialog() {
-        // Create two EditText fields for title and description
         EditText etTitle = new EditText(this);
         etTitle.setHint("Title");
 
@@ -69,24 +88,25 @@ public class MainActivity extends AppCompatActivity {
         etBody.setInputType(InputType.TYPE_TEXT_FLAG_MULTI_LINE);
         etBody.setMinLines(3);
 
-        // Wrap the fields in a vertical layout with padding
-        View dialogView = new LinearLayoutCompat(this);
-        ((LinearLayoutCompat) dialogView).setOrientation(LinearLayoutCompat.VERTICAL);
+        // Simple vertical container with padding.
+        LinearLayoutCompat container = new LinearLayoutCompat(this);
+        container.setOrientation(LinearLayoutCompat.VERTICAL);
         int pad = getResources().getDimensionPixelSize(R.dimen.padding_standard);
-        ((LinearLayoutCompat) dialogView).setPadding(pad, pad, pad, pad);
-        ((LinearLayoutCompat) dialogView).addView(etTitle);
-        ((LinearLayoutCompat) dialogView).addView(etBody);
+        container.setPadding(pad, pad, pad, pad);
+        container.addView(etTitle);
+        container.addView(etBody);
 
-        // Show a dialog with Save/Cancel options
         new AlertDialog.Builder(this)
                 .setTitle("New Note")
-                .setView(dialogView)
+                .setView(container)
                 .setPositiveButton("Save", (d, which) -> {
                     String title = etTitle.getText().toString().trim();
-                    String body = etBody.getText().toString().trim();
+                    String body  = etBody.getText().toString().trim();
                     if (!title.isEmpty()) {
-                        // Add new note and update the adapter
-                        notes.add(new Note(title, body));
+                        // Persist to DB first.
+                        Note n = new Note(title, body);
+                        n.id = (int) noteDao.insert(n);
+                        notes.add(n);
                         sortNotes();
                     }
                 })
@@ -94,23 +114,43 @@ public class MainActivity extends AppCompatActivity {
                 .show();
     }
 
-    /**
-     * Basic data model representing a Note.
-     */
-    private static class Note {
-        final String title;
-        final String body;
-        boolean done = false;
+    /** Shows a note and lets user toggle “done” or delete it. */
+    private void showViewDialog(Note note, int position) {
+        View dialog = LayoutInflater.from(this).inflate(R.layout.item_note, null);
+        TextView tvTitle  = dialog.findViewById(R.id.tvTitle);
+        TextView tvStatus = dialog.findViewById(R.id.tvDone);
 
-        Note(String title, String body) {
-            this.title = title;
-            this.body = body;
-        }
+        tvTitle.setText(note.title + "\n\n" + note.body);
+        tvStatus.setText(note.done ? "Done" : "Not done");
+
+        new AlertDialog.Builder(this)
+                .setTitle("Note")
+                .setView(dialog)
+                .setPositiveButton(note.done ? "Mark as Undone" : "Mark as Done", (d, w) -> {
+                    note.done = !note.done;
+                    noteDao.update(note);      // persist change
+                    sortNotes();
+                })
+                .setNeutralButton("Delete", (d, w) -> {
+                    notes.remove(position);
+                    noteDao.delete(note);       // remove from DB
+                    adapter.notifyItemRemoved(position);
+                    Toast.makeText(this, "Task deleted", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Close", null)
+                .show();
     }
 
-    /**
-     * Adapter class for displaying notes in the RecyclerView.
-     */
+    /** Sorts notes (undone first) and refreshes adapter. */
+    private void sortNotes() {
+        notes.sort((a, b) -> Boolean.compare(a.done, b.done)); // false < true
+        adapter.notifyDataSetChanged();
+    }
+
+    /* --------------------------------------------------------------------- */
+    /* RecyclerView adapter & view-holder.                                   */
+    /* --------------------------------------------------------------------- */
+
     private class NoteAdapter extends RecyclerView.Adapter<NoteAdapter.VH> {
 
         private final List<Note> data;
@@ -119,7 +159,6 @@ public class MainActivity extends AppCompatActivity {
             this.data = data;
         }
 
-        // Creates new ViewHolder (called only when no reusable view is available)
         @NonNull
         @Override
         public VH onCreateViewHolder(@NonNull ViewGroup parent, int viewType) {
@@ -128,15 +167,12 @@ public class MainActivity extends AppCompatActivity {
             return new VH(v);
         }
 
-        // Binds data to the view (called every time a view becomes visible)
         @Override
         public void onBindViewHolder(@NonNull VH h, int pos) {
             Note n = data.get(pos);
             h.title.setText(n.title);
             h.status.setText(n.done ? "Done" : "Not done");
-
-            float alpha = n.done ? 0.5f : 1.0f; //opacity za zavrsene
-            h.itemView.setAlpha(alpha); 
+            h.itemView.setAlpha(n.done ? 0.5f : 1.0f); // subtle opacity for completed items
         }
 
         @Override
@@ -144,57 +180,23 @@ public class MainActivity extends AppCompatActivity {
             return data.size();
         }
 
-        // ViewHolder holds references to views and handles click events
+        /** View-holder that handles item clicks. */
         class VH extends RecyclerView.ViewHolder implements View.OnClickListener {
-            final TextView title = itemView.findViewById(R.id.tvTitle);
+            final TextView title  = itemView.findViewById(R.id.tvTitle);
             final TextView status = itemView.findViewById(R.id.tvDone);
 
             VH(@NonNull View itemView) {
                 super(itemView);
-                itemView.setOnClickListener(this); // Handle click on entire item
+                itemView.setOnClickListener(this);
             }
 
             @Override
             public void onClick(View v) {
                 int pos = getBindingAdapterPosition();
-                if (pos == RecyclerView.NO_POSITION) return;
-                showViewDialog(data.get(pos), pos);
+                if (pos != RecyclerView.NO_POSITION) {
+                    showViewDialog(data.get(pos), pos);
+                }
             }
         }
-    }
-
-    /**
-     * Displays a note and allows the user to toggle its "done" state.
-     */
-    private void showViewDialog(Note note, int position) {
-        // Inflate the note layout again for the dialog
-        View dialog = LayoutInflater.from(this).inflate(R.layout.item_note, null);
-        TextView tvTitle = dialog.findViewById(R.id.tvTitle);
-        TextView tvStatus = dialog.findViewById(R.id.tvDone);
-
-        // Combine title and body into one block
-        tvTitle.setText(note.title + "\n\n" + note.body);
-        tvStatus.setText(note.done ? "Done" : "Not done");
-
-        // Dialog for viewing/toggling note status
-        new AlertDialog.Builder(this)
-                .setTitle("Note")
-                .setView(dialog)
-                .setPositiveButton(note.done ? "Mark as Undone" : "Mark as Done", (d, w) -> {
-                    // Toggle the done flag and update the view
-                    note.done = !note.done;
-                    sortNotes();
-                })
-                .setNeutralButton("Delete", (d, w) -> {
-                    notes.remove(position);
-                    adapter.notifyItemRemoved(position);
-                    Toast.makeText(this, "Task deleted", Toast.LENGTH_SHORT).show();
-                })
-                .setNegativeButton("Close", null)
-                .show();
-    }
-    private void sortNotes() {
-        notes.sort((a, b) -> Boolean.compare(a.done, b.done)); // false < true
-        adapter.notifyDataSetChanged();
     }
 }
